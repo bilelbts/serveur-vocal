@@ -4,17 +4,42 @@ import requests
 import time
 import pyttsx3
 import datetime
+import serial
+import mysql.connector
 
-# Paramètres pour PyAudio
+# Paramètres PyAudio
 CHUNK = 1024
 FORMAT = pyaudio.paInt16
 CHANNELS = 1
 RATE = 44100
 
+# Clé API pour OpenWeatherMap
 api_key = "c5deb81a5b0870c1ff180fd7fb9cf81f"
 
 # Initialisation de pyttsx3
 engine = pyttsx3.init()
+engine.setProperty('voice', 'french')
+
+# Configuration du port série pour l'Arduino
+serial_port = '/dev/rfcomm0'
+baud_rate = 9600
+
+# Connexion à la base de données MySQL
+mydb = mysql.connector.connect(
+    host="192.168.0.122",
+    user="bilal",
+    password="Bilal13112004?",
+    database="STATION_METEO"
+)
+
+# Fonction pour envoyer des commandes à l'Arduino
+def send_command_to_arduino(command):
+    try:
+        with serial.Serial(serial_port, baud_rate, timeout=1) as ser:
+            ser.write(command.encode())
+            print(f"Envoyé à l'Arduino : {command}")
+    except serial.SerialException as e:
+        print(f"Erreur de communication avec l'Arduino : {e}")
 
 # Fonction pour obtenir l'index du microphone
 def get_microphone_index():
@@ -25,7 +50,7 @@ def get_microphone_index():
 
     print("Liste des microphones disponibles :")
     for index, name in enumerate(mic_list):
-        print("Microphone index {}: {}".format(index, name))
+        print(f"Microphone index {index}: {name}")
 
     while True:
         try:
@@ -37,50 +62,31 @@ def get_microphone_index():
         except ValueError:
             print("Veuillez entrer un nombre entier pour l'index du microphone.")
 
-# Fonction pour obtenir l'index du périphérique de sortie
-def get_output_device_index():
-    p = pyaudio.PyAudio()
-    print("Liste des périphériques de sortie disponibles :")
-    output_device_indices = []
-
-    for index in range(p.get_device_count()):
-        info = p.get_device_info_by_index(index)
-        if info["maxOutputChannels"] > 0:
-            output_device_indices.append(index)
-            print(f"Périphérique de sortie index {index}: {info['name']}")
-
-    p.terminate()
-
-    if not output_device_indices:
-        print("Aucun périphérique de sortie détecté sur votre système.")
-        return None
-
-    while True:
-        try:
-            selected_index = int(input("Entrez l'index du périphérique de sortie à utiliser : "))
-            if selected_index not in output_device_indices:
-                print("Index invalide. Veuillez entrer un index valide.")
-            else:
-                return selected_index
-        except ValueError:
-            print("Veuillez entrer un nombre entier pour l'index du périphérique de sortie.")
-
 # Fonction pour reconnaître la parole
 def recognize_speech(microphone_index):
     r = sr.Recognizer()
-    with sr.Microphone(device_index=microphone_index) as source:
-        print("Dites quelque chose :")
-        audio = r.listen(source)
-        try:
-            command = r.recognize_google(audio, language='fr-fr')
-            print("Vous avez dit : " + command)
-            return command.lower()
-        except sr.UnknownValueError:
-            print("La reconnaissance de la parole a échoué")
-            return ""
-        except sr.RequestError as e:
-            print("Erreur lors de la reconnaissance de la parole : {0}".format(e))
-            return ""
+    try:
+        with sr.Microphone(device_index=microphone_index) as source:
+            print("Ajustement du bruit ambiant...")
+            r.adjust_for_ambient_noise(source)
+            print("Dites quelque chose :")
+            audio = r.listen(source)
+            try:
+                command = r.recognize_google(audio, language='fr-FR')
+                print("Vous avez dit : " + command)
+                return command.lower()
+            except sr.UnknownValueError:
+                print("La reconnaissance de la parole a échoué")
+                return ""
+            except sr.RequestError as e:
+                print(f"Erreur lors de la reconnaissance de la parole : {e}")
+                return ""
+    except AssertionError as e:
+        print(f"Erreur lors de l'accès au microphone : {e}")
+        return ""
+    except Exception as e:
+        print(f"Une erreur s'est produite lors de la reconnaissance de la parole : {e}")
+        return ""
 
 # Fonction pour gérer les commandes
 def handle_command(command):
@@ -103,16 +109,11 @@ def handle_command(command):
         response_text = "Bonjour!"
         print(response_text)
         speak(response_text)
-    elif "au revoir" in command:
+    elif "au revoir" in command or "tu peux t'éteindre" in command:
         response_text = "Au revoir!"
         print(response_text)
         speak(response_text)
-        return False
-    elif "tu peux t'éteindre" in command:
-        response_text = "Au revoir!"
-        print(response_text)
-        speak(response_text)
-        return False
+        return False  # Arrêter le programme
     elif "heure" in command:
         current_time = datetime.datetime.now().strftime("%H:%M")
         response_text = f"Il est {current_time} actuellement."
@@ -123,11 +124,44 @@ def handle_command(command):
         response_text = f"Aujourd'hui, nous sommes le {current_date}."
         print(response_text)
         speak(response_text)
+    elif "ferme le store" in command:
+        response_text = "Fermeture du store."
+        print(response_text)
+        speak(response_text)
+        send_command_to_arduino('1')
+    elif "ouvre le store" in command:
+        response_text = "Ouverture du store."
+        print(response_text)
+        speak(response_text)
+        send_command_to_arduino('0')
+    elif "quelle est la température intérieure" in command:
+        cursor = mydb.cursor()
+        cursor.execute("SELECT * FROM valeur ")
+        result = cursor.fetchone()
+        if result:
+            temperature = result[1]
+            response_text = f"La température intérieure est de {temperature} degrés Celsius."
+            print(response_text)
+            speak(response_text)
+    elif "quelle est la température extérieure" in command:
+        cursor = mydb.cursor()
+        cursor.execute("SELECT * FROM valeur ")
+        result1 = cursor.fetchone()
+        if result1:
+            temperature1 = result1[2]
+            response_text = f"La température extérieure est de {temperature1} degrés Celsius."
+            print(response_text)
+            speak(response_text)
+        else:
+            response_text = "La température intérieure n'est pas disponible pour le moment."
+            print(response_text)
+            speak(response_text)
+        cursor.close()
     else:
         response_text = "Commande non reconnue"
         print(response_text)
         speak(response_text)
-    return True
+    return True  # Continuer à exécuter le programme
 
 # Fonction pour parler
 def speak(text):
@@ -137,26 +171,25 @@ def speak(text):
 # Obtenir l'index du microphone
 microphone_index = get_microphone_index()
 
-# Obtenir l'index du périphérique de sortie
-output_device_index = get_output_device_index()
-
-# Vous pouvez essayer de configurer pyttsx3 pour utiliser le périphérique de sortie sélectionné
-# Notez que cette fonctionnalité pourrait ne pas être directement disponible pour pyttsx3
-# engine.setProperty('outputDevice', output_device_index)
-
 # Boucle principale pour gérer la reconnaissance de la parole
 running = True
 while running:
     # Reconnaître la parole
-    command = recognize_speech(microphone_index)
-    if command:
-        # Gérer la commande
-        running = handle_command(command)
+    if microphone_index is not None:
+        command = recognize_speech(microphone_index)
+        if command:
+            # Gérer la commande
+            running = handle_command(command)
+        else:
+            # Si la reconnaissance vocale n'a pas compris la commande
+            response_text = "Je n'ai pas compris."
+            print(response_text)
+            speak(response_text)
     else:
-        # Si la reconnaissance vocale n'a pas compris la commande
-        response_text = "Je n'ai pas compris."
-        print(response_text)
-        speak(response_text)
+        print("Microphone non initialisé.")
+        break
 
     time.sleep(1)
 
+# Fermeture de la connexion à la base de données
+mydb.close()
